@@ -240,5 +240,4 @@ print("\nActions generated from homology for all states:")
 for idx, action in enumerate(actions_from_homology, start=1):
     print(f"{idx}. {action}")
 
-
 print(f"\nStates Visited: {no_states}, Actions Considered: {no_actions}")
