@@ -9,7 +9,7 @@ import numpy as np
 GenParams().get_example_values()
 
 generate_params = {
-    GenParams.MAX_NEW_TOKENS: 250,
+    GenParams.MAX_NEW_TOKENS: 500,
     GenParams.RETURN_OPTIONS: {'token_logprobs': True, 'input_text': False, 'generated_tokens': True, 'input_tokens': True}
 }
 
@@ -21,7 +21,7 @@ expert_model = Model(
     params=generate_params,
     credentials=Credentials(
                     api_key = f"{watsonx_api_key}",
-                    url = "https://eu-gb.ml.cloud.ibm.com"),
+                    url = "https://us-south.ml.cloud.ibm.com"),
                     project_id = f"{watsonx_project_id}"
     )
 
@@ -30,7 +30,17 @@ primary_model = Model(
     params=generate_params,
     credentials=Credentials(
                     api_key = f"{watsonx_api_key}",
-                    url = "https://eu-gb.ml.cloud.ibm.com"),
+                    url = "https://us-south.ml.cloud.ibm.com"),
+                    project_id = f"{watsonx_project_id}"
+    )
+
+
+ontology_generator_model = Model(
+    model_id="meta-llama/llama-2-70b-chat",
+    params=generate_params,
+    credentials=Credentials(
+                    api_key = f"{watsonx_api_key}",
+                    url = "https://us-south.ml.cloud.ibm.com"),
                     project_id = f"{watsonx_project_id}"
     )
 

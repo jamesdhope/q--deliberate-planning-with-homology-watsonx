@@ -2,6 +2,7 @@ import json
 from watsonx import expert_model, primary_model
 import numpy as np
 from sentence_transformers import SentenceTransformer, util
+from homology import build_ontology, construct_graph, embed_graph, create_simplex, compute_homology, get_boundary_words
 
 question = "If you crash landed in the desert, what would be prioritised list of things you must do inorder to survive?"
 
@@ -9,6 +10,25 @@ max_states_dropout = 10 # maximum number of states to explore before dropout
 top_k = 3 # maxumum number of actions to explore from the current state
 semantic_similarity_threshold = 0.6 # semantic similarity of state (based on previous actions) to considered 'visited'
 _lambda = 1.0
+
+def homology(actions: list[str]):
+
+    data = build_ontology(actions)
+
+    if len(data) != 0:
+
+        graph = construct_graph(data)
+        embeddings = embed_graph(graph)
+
+        # Build a mapping between nodes names and low dim embeddings
+        node_names = {node for node in graph.nodes}
+        low_dim_node_embedding_mapping = dict(zip(node_names, embeddings))
+
+        simplex_tree,point_cloud = create_simplex(embeddings)
+        boundary_simplicies = compute_homology(simplex_tree)
+        boundary_words = get_boundary_words(boundary_simplicies,point_cloud,low_dim_node_embedding_mapping)
+
+        return {boundary_words}
 
 def extract_actions(generated_text):
     # Split the response into lines and filter out the ones containing actions
@@ -42,7 +62,12 @@ def get_top_k_actions(state,question):
     return the top-k actions for the state
     '''
     actions_in_state = [action for action in state.get('actions', []) if action]
-    policy = f'''Plan {top_k} distinct and different actions that you can undertake as a language model to better answer the question. Do not repeat any of the actions if there are any actions in this list of previous actions: {actions_in_state}. Provide your best response to the question based on your understanding. Answer in the format:
+    
+    policy = f'''Plan {top_k} distinct and different actions that you can undertake as a language model to better answer the question: {question}. 
+    Do not repeat any of the actions if there are any actions in this list of previous actions: {actions_in_state}. 
+    Provide your best response to the question based on your understanding. 
+    
+    Answer in the format:
 
     Action 1: <Best Action to take>
     Action 2: <Next best Action to take>
@@ -54,11 +79,51 @@ def get_top_k_actions(state,question):
     '''
 
     # generate actions under the policy, pi theta
-    results = primary_model.generate(prompt=question+policy)
-
+    results = primary_model.generate(prompt=policy)
     generated_text = results['results'][0]['generated_text']
     actions = extract_actions(generated_text)
+
     actions_with_rewards = []
+    for action in actions:
+        eval_policy = f'''
+        Use the following action and any subsequent actions of your own choosing to answer the question. 
+        The action is {action}
+        The question is {question}
+
+        Come back to me with a final response to the question having completed the action.
+        '''
+        results = expert_model.generate(prompt=eval_policy)
+        log_probs = calculate_logprobs(results)
+        reward = calculate_reward(log_probs)
+        
+        #map actions to their reward values
+        actions_with_rewards.append({'action':action,'q_value':reward,'homology':'false'})
+        actions_with_rewards.sort(key=lambda x: x['q_value'], reverse=True)
+
+    # compute homology over actions
+    boundary_words = homology(actions)
+
+    # regenerate improved actions
+    policy = f'''Plan {top_k} distinct and different actions that you can undertake as a language model to better answer the question: {question}. 
+    Do not repeat any of the actions if there are any actions in this list of previous actions: {actions_in_state} {actions}.
+    Give particular consideration to the gaps associated with these groups of words: {boundary_words} 
+    Provide your best response to the question based on your understanding. 
+    
+    Answer in the format:
+
+    Action 1: <Best Action to take>
+    Action 2: <Next best Action to take>
+    Action 3: <Next best Action to take>
+    ...
+    Action n: <Next best Action to take>
+
+    Answer: <your best answer>
+    '''
+
+    # generate additional actions under the policy, pi theta, based on the homological analysis
+    results = primary_model.generate(prompt=policy)
+    generated_text = results['results'][0]['generated_text']
+    actions = extract_actions(generated_text)
 
     # use a stronger LLM to compute the reward for each action-trajectory
     for action in actions:
@@ -74,7 +139,7 @@ def get_top_k_actions(state,question):
         reward = calculate_reward(log_probs)
         
         #map actions to their reward values
-        actions_with_rewards.append({'action':action,'q_value':reward})
+        actions_with_rewards.append({'action':action,'q_value':reward,'homology':'true'})
         actions_with_rewards.sort(key=lambda x: x['q_value'], reverse=True)
 
     return actions_with_rewards
@@ -122,6 +187,7 @@ open_list.append(inital_state)
 
 no_states = 0
 no_actions = 0
+actions_from_homology = []
 
 print(f'Running Q* with lamda: {_lambda}, max_states_dropout: {max_states_dropout}, top_k_actions: {top_k}, semantic_similarity_threshold: {semantic_similarity_threshold}\n')
 
@@ -144,10 +210,11 @@ while len(open_list) != 0 and no_states < max_states_dropout:
     # TODO: if is_terminal(state):  # Assuming each state has an is_terminal method
     #    return extract_answer(state)  # Define extract_answer to get the solution from the terminal state
     
-    # FOR EACH ACTION A in the TOP-K ACTIONS generated by the LLM for the STATE S and evaluated by Q*
+    # Generate Actions
     top_k_actions = get_top_k_actions(state,question)  
-    print(f'Expanding Actions: {top_k_actions}\n')
+    #print(f'Expanding Actions: {top_k_actions}\n')
 
+    # FOR EACH ACTION A in the TOP-K ACTIONS generated by the LLM for the STATE S and evaluated by Q*
     for action in top_k_actions: # Expand the Open List / States to Explore
         
         no_actions+=1
@@ -159,11 +226,19 @@ while len(open_list) != 0 and no_states < max_states_dropout:
         if s_prime_in_closed_list(state_prime,closed_list) < semantic_similarity_threshold:
             open_list.append({'f_value': state['f_value'] + _lambda*action['q_value'],'actions': state['actions'] + [action['action']]}) 
 
+        if action['homology'] == 'true':
+            actions_from_homology.append(action['action'])
+
 state = max(closed_list, key=lambda state: state['f_value'])
 actions_in_state = [action for action in state.get('actions', []) if action]
 
 print('State with the highest utility has the following actions:')
 for idx, item in enumerate(actions_in_state, start=1):
     print(f"{idx}. {item}")
+
+print("\nActions generated from homology for all states:")
+for idx, action in enumerate(actions_from_homology, start=1):
+    print(f"{idx}. {action}")
+
 
 print(f"\nStates Visited: {no_states}, Actions Considered: {no_actions}")

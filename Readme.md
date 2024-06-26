@@ -1,6 +1,6 @@
-## q--deliberate-planning-watsonx
+## q--deliberate-planning-watsonx-with-homological-analysis
 
-Implementation of Q*: Improving Multi-step Reasoning for LLMs with Deliberate Planning.
+Implementation of Q*: Improving Multi-step Reasoning for LLMs with Deliberate Planning extended with homological analysis.
 
 Source: https://arxiv.org/pdf/2406.14283v1
 
@@ -18,7 +18,7 @@ PROJECT_ID=XXXXXX
 * The aggregated utility h(s) is the aggregated Q-value or log_probs for the path to that state
 * The algorithm terminates when the open_list is empty or if the specified number of states has been visited
 * The question / task, the number of states that can be visited, the semantic similarity score for states to be considered the same (visited), the lambda value, and the number of actions are exposed as global parameters to be configured. 
-
+* Homological analysis is used to identify and address gaps in actions generated.
 
 
 ### Sample Output
